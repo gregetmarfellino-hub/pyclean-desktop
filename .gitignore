@@ -1,0 +1,23 @@
+# Build output
+build/
+build-release/
+dist/
+
+# Runtime/generated data
+*.db
+pyclean_config.ini
+
+# Test/debug junk
+test.cpp
+test.exe
+build-error*.txt
+mobile-error.txt
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+
+# VS Code local config
+.vscode/
