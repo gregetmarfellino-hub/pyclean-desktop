@@ -1542,6 +1542,155 @@ void MobileServer::setupRoutes()
 
 
     /*
+     * POST /api/download
+     *
+     * Sends one readable PC file to the mobile client. Directories and
+     * protected Windows locations are intentionally rejected.
+     *
+     * Qt's simple response object owns the full payload in memory. This is
+     * appropriate for the first download pass; streaming/progress support can
+     * be layered on later without changing the endpoint contract.
+     */
+    httpServer->route(
+        "/api/download",
+        QHttpServerRequest::Method::Post,
+        [](const QHttpServerRequest &request)
+        {
+            const QJsonObject body =
+                parseJsonObject(
+                    request
+                );
+
+            const QString path =
+                jsonPath(
+                    body
+                );
+
+            if (path.isEmpty())
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Path file tidak valid!"
+                    ),
+                    StatusCode::BadRequest
+                );
+            }
+
+            if (isProtectedPath(path))
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Protected file path."
+                    ),
+                    StatusCode::Forbidden
+                );
+            }
+
+            const QFileInfo info(
+                path
+            );
+
+            if (
+                !info.exists()
+                || !info.isFile()
+            )
+            {
+                return apiError(
+                    QStringLiteral(
+                        "File tidak ditemukan di PC."
+                    ),
+                    StatusCode::NotFound
+                );
+            }
+
+            if (!info.isReadable())
+            {
+                return apiError(
+                    QStringLiteral(
+                        "File tidak dapat dibaca."
+                    ),
+                    StatusCode::Forbidden
+                );
+            }
+
+            QFile file(
+                info.absoluteFilePath()
+            );
+
+            if (!file.open(QIODevice::ReadOnly))
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Gagal membuka file untuk download."
+                    ),
+                    StatusCode::InternalServerError
+                );
+            }
+
+            const QByteArray data =
+                file.readAll();
+
+            if (file.error() != QFileDevice::NoError)
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Gagal membaca file untuk download."
+                    ),
+                    StatusCode::InternalServerError
+                );
+            }
+
+            QString safeFilename =
+                info.fileName();
+
+            safeFilename.replace(
+                QLatin1Char('"'),
+                QLatin1Char('_')
+            );
+
+            safeFilename.remove(
+                QLatin1Char('\r')
+            );
+
+            safeFilename.remove(
+                QLatin1Char('\n')
+            );
+
+            QHttpServerResponse response(
+                QByteArrayLiteral(
+                    "application/octet-stream"
+                ),
+                data,
+                StatusCode::Ok
+            );
+
+            QHttpHeaders headers =
+                response.headers();
+
+            headers.append(
+                "Content-Disposition",
+                QByteArrayLiteral(
+                    "attachment; filename=\""
+                )
+                    + safeFilename.toUtf8()
+                    + QByteArrayLiteral("\"")
+            );
+
+            headers.append(
+                "X-PyClean-Filename",
+                safeFilename.toUtf8()
+            );
+
+            response.setHeaders(
+                std::move(headers)
+            );
+
+            return response;
+        }
+    );
+
+
+    /*
      * POST /api/execute-sort
      */
     httpServer->route(
