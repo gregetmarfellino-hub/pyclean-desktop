@@ -620,6 +620,132 @@ QString uniqueDestinationPath(
 }
 
 
+QString uniqueMoveDestinationPath(
+    const QString &desiredPath,
+    bool isDirectory
+)
+{
+    if (!QFileInfo::exists(desiredPath))
+    {
+        return desiredPath;
+    }
+
+    if (!isDirectory)
+    {
+        return uniqueDestinationPath(
+            desiredPath
+        );
+    }
+
+    const QFileInfo desiredInfo(
+        desiredPath
+    );
+
+    const QString directory =
+        desiredInfo.absolutePath();
+
+    const QString baseName =
+        desiredInfo.fileName();
+
+    for (int counter = 1; ; ++counter)
+    {
+        const QString candidatePath =
+            QDir(directory)
+                .filePath(
+                    QStringLiteral(
+                        "%1 (%2)"
+                    )
+                    .arg(baseName)
+                    .arg(counter)
+                );
+
+        if (!QFileInfo::exists(candidatePath))
+        {
+            return candidatePath;
+        }
+    }
+}
+
+
+QString normalizedPathForCompare(
+    const QString &path
+)
+{
+    return QDir::cleanPath(
+        QDir::fromNativeSeparators(
+            QFileInfo(path)
+                .absoluteFilePath()
+        )
+    ).toLower();
+}
+
+
+bool isSameOrChildPath(
+    const QString &candidate,
+    const QString &parent
+)
+{
+    const QString cleanCandidate =
+        normalizedPathForCompare(
+            candidate
+        );
+
+    const QString cleanParent =
+        normalizedPathForCompare(
+            parent
+        );
+
+    return (
+        cleanCandidate == cleanParent
+        || cleanCandidate.startsWith(
+            cleanParent + QLatin1Char('/')
+        )
+    );
+}
+
+
+bool isValidSimpleName(
+    const QString &name
+)
+{
+    const QString trimmed =
+        name.trimmed();
+
+    if (
+        trimmed.isEmpty()
+        || trimmed == QStringLiteral(".")
+        || trimmed == QStringLiteral("..")
+    )
+    {
+        return false;
+    }
+
+    static const QRegularExpression invalidCharacters(
+        QStringLiteral(
+            R"REGEX([<>:"/\\|?*\x00-\x1F])REGEX"
+        )
+    );
+
+    if (invalidCharacters.match(trimmed).hasMatch())
+    {
+        return false;
+    }
+
+    /*
+     * Windows does not accept names ending in a space or period.
+     */
+    if (
+        trimmed.endsWith(QLatin1Char(' '))
+        || trimmed.endsWith(QLatin1Char('.'))
+    )
+    {
+        return false;
+    }
+
+    return true;
+}
+
+
 bool saveUpload(
     const MultipartUpload &upload,
     const QByteArray &body,
@@ -1686,6 +1812,371 @@ void MobileServer::setupRoutes()
             );
 
             return response;
+        }
+    );
+
+
+    /*
+     * POST /api/rename
+     *
+     * Renames one file or folder inside its current parent directory.
+     * The client supplies a basename only; path traversal and Windows-invalid
+     * filename characters are rejected.
+     */
+    httpServer->route(
+        "/api/rename",
+        QHttpServerRequest::Method::Post,
+        [](const QHttpServerRequest &request)
+        {
+            const QJsonObject body =
+                parseJsonObject(
+                    request
+                );
+
+            const QString path =
+                jsonPath(
+                    body
+                );
+
+            const QString newName =
+                body.value(
+                    QStringLiteral("new_name")
+                ).toString()
+                 .trimmed();
+
+            if (
+                path.isEmpty()
+                || !isValidSimpleName(newName)
+            )
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Nama baru tidak valid."
+                    ),
+                    StatusCode::BadRequest
+                );
+            }
+
+            if (isProtectedPath(path))
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Protected path cannot be renamed."
+                    ),
+                    StatusCode::Forbidden
+                );
+            }
+
+            const QFileInfo sourceInfo(
+                path
+            );
+
+            if (!sourceInfo.exists())
+            {
+                return apiError(
+                    QStringLiteral(
+                        "File/folder tidak ditemukan di PC."
+                    ),
+                    StatusCode::NotFound
+                );
+            }
+
+            QDir parentDirectory(
+                sourceInfo.absolutePath()
+            );
+
+            const QString targetPath =
+                parentDirectory.filePath(
+                    newName
+                );
+
+            if (
+                normalizedPathForCompare(targetPath)
+                == normalizedPathForCompare(
+                    sourceInfo.absoluteFilePath()
+                )
+            )
+            {
+                QJsonObject response;
+                response["status"] =
+                    QStringLiteral("success");
+                response["success"] = true;
+                response["message"] =
+                    QStringLiteral(
+                        "Nama item tidak berubah."
+                    );
+                response["old_path"] =
+                    QDir::toNativeSeparators(
+                        sourceInfo.absoluteFilePath()
+                    );
+                response["new_path"] =
+                    QDir::toNativeSeparators(
+                        sourceInfo.absoluteFilePath()
+                    );
+
+                return jsonResponse(
+                    response
+                );
+            }
+
+            if (QFileInfo::exists(targetPath))
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Nama tersebut sudah dipakai di folder ini."
+                    ),
+                    StatusCode::BadRequest
+                );
+            }
+
+            if (
+                !parentDirectory.rename(
+                    sourceInfo.fileName(),
+                    newName
+                )
+            )
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Gagal mengganti nama item."
+                    ),
+                    StatusCode::InternalServerError
+                );
+            }
+
+            QJsonObject response;
+            response["status"] =
+                QStringLiteral("success");
+            response["success"] = true;
+            response["message"] =
+                QStringLiteral(
+                    "Berhasil mengganti nama menjadi: %1"
+                ).arg(newName);
+            response["old_path"] =
+                QDir::toNativeSeparators(
+                    sourceInfo.absoluteFilePath()
+                );
+            response["new_path"] =
+                QDir::toNativeSeparators(
+                    targetPath
+                );
+
+            return jsonResponse(
+                response
+            );
+        }
+    );
+
+
+    /*
+     * POST /api/move
+     *
+     * Moves one file or folder to an existing PC directory. Files retain the
+     * existing cross-volume copy/remove fallback. Directory moves use the
+     * filesystem rename path and therefore stay deliberately conservative.
+     */
+    httpServer->route(
+        "/api/move",
+        QHttpServerRequest::Method::Post,
+        [](const QHttpServerRequest &request)
+        {
+            const QJsonObject body =
+                parseJsonObject(
+                    request
+                );
+
+            const QString path =
+                jsonPath(
+                    body
+                );
+
+            const QString targetDirectoryPath =
+                body.value(
+                    QStringLiteral("target_dir")
+                ).toString()
+                 .trimmed();
+
+            if (
+                path.isEmpty()
+                || targetDirectoryPath.isEmpty()
+            )
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Source atau target folder tidak valid."
+                    ),
+                    StatusCode::BadRequest
+                );
+            }
+
+            if (
+                isProtectedPath(path)
+                || isProtectedPath(targetDirectoryPath)
+            )
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Protected path cannot be moved."
+                    ),
+                    StatusCode::Forbidden
+                );
+            }
+
+            const QFileInfo sourceInfo(
+                path
+            );
+
+            const QFileInfo targetDirectoryInfo(
+                targetDirectoryPath
+            );
+
+            if (!sourceInfo.exists())
+            {
+                return apiError(
+                    QStringLiteral(
+                        "File/folder sumber tidak ditemukan."
+                    ),
+                    StatusCode::NotFound
+                );
+            }
+
+            if (
+                !targetDirectoryInfo.exists()
+                || !targetDirectoryInfo.isDir()
+            )
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Folder tujuan tidak ditemukan."
+                    ),
+                    StatusCode::BadRequest
+                );
+            }
+
+            if (!targetDirectoryInfo.isWritable())
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Folder tujuan tidak dapat ditulis."
+                    ),
+                    StatusCode::Forbidden
+                );
+            }
+
+            if (
+                normalizedPathForCompare(
+                    sourceInfo.absolutePath()
+                )
+                == normalizedPathForCompare(
+                    targetDirectoryInfo.absoluteFilePath()
+                )
+            )
+            {
+                QJsonObject response;
+                response["status"] =
+                    QStringLiteral("success");
+                response["success"] = true;
+                response["message"] =
+                    QStringLiteral(
+                        "Item sudah berada di folder tersebut."
+                    );
+                response["path"] =
+                    QDir::toNativeSeparators(
+                        sourceInfo.absoluteFilePath()
+                    );
+
+                return jsonResponse(
+                    response
+                );
+            }
+
+            if (
+                sourceInfo.isDir()
+                && isSameOrChildPath(
+                    targetDirectoryInfo.absoluteFilePath(),
+                    sourceInfo.absoluteFilePath()
+                )
+            )
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Folder tidak bisa dipindahkan ke dalam dirinya sendiri."
+                    ),
+                    StatusCode::BadRequest
+                );
+            }
+
+            const QString desiredTargetPath =
+                QDir(
+                    targetDirectoryInfo.absoluteFilePath()
+                ).filePath(
+                    sourceInfo.fileName()
+                );
+
+            const QString actualTargetPath =
+                uniqueMoveDestinationPath(
+                    desiredTargetPath,
+                    sourceInfo.isDir()
+                );
+
+            bool success = false;
+
+            if (sourceInfo.isDir())
+            {
+                success =
+                    QDir().rename(
+                        sourceInfo.absoluteFilePath(),
+                        actualTargetPath
+                    );
+            }
+            else
+            {
+                success =
+                    moveFileFast(
+                        sourceInfo.absoluteFilePath(),
+                        actualTargetPath
+                    );
+            }
+
+            if (!success)
+            {
+                return apiError(
+                    sourceInfo.isDir()
+                    ? QStringLiteral(
+                        "Gagal memindahkan folder. Coba tujuan pada drive yang sama."
+                      )
+                    : QStringLiteral(
+                        "Gagal memindahkan file."
+                      ),
+                    StatusCode::InternalServerError
+                );
+            }
+
+            QJsonObject response;
+            response["status"] =
+                QStringLiteral("success");
+            response["success"] = true;
+            response["message"] =
+                QStringLiteral(
+                    "Berhasil memindahkan: %1"
+                ).arg(
+                    sourceInfo.fileName()
+                );
+            response["old_path"] =
+                QDir::toNativeSeparators(
+                    sourceInfo.absoluteFilePath()
+                );
+            response["new_path"] =
+                QDir::toNativeSeparators(
+                    actualTargetPath
+                );
+            response["collision_renamed"] =
+                normalizedPathForCompare(actualTargetPath)
+                != normalizedPathForCompare(desiredTargetPath);
+
+            return jsonResponse(
+                response
+            );
         }
     );
 
