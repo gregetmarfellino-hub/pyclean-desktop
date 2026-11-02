@@ -22,6 +22,7 @@
 #include <QNetworkInterface>
 #include <QRegularExpression>
 #include <QSet>
+#include <QStringList>
 #include <QTcpServer>
 #include <QUuid>
 
@@ -1261,29 +1262,226 @@ QString MobileServer::errorMessage() const
 }
 
 
+void MobileServer::setSharedRoot(
+    const QString &path
+)
+{
+    const QFileInfo info(
+        path.trimmed()
+    );
+
+    if (
+        !info.exists()
+        || !info.isDir()
+    )
+    {
+        sharedRootPath.clear();
+        return;
+    }
+
+    const QString canonical =
+        info.canonicalFilePath();
+
+    sharedRootPath =
+        QDir::cleanPath(
+            canonical.isEmpty()
+                ? info.absoluteFilePath()
+                : canonical
+        );
+}
+
+
+void MobileServer::clearSharedRoot()
+{
+    sharedRootPath.clear();
+}
+
+
+QString MobileServer::sharedRoot() const
+{
+    return sharedRootPath;
+}
+
+
+bool MobileServer::hasSharedRoot() const
+{
+    return !sharedRootPath.trimmed().isEmpty();
+}
+
+
+void MobileServer::setReadOnly(
+    bool enabled
+)
+{
+    readOnlyMode = enabled;
+}
+
+
+bool MobileServer::isReadOnly() const
+{
+    return readOnlyMode;
+}
+
+
+bool MobileServer::isPathAllowed(
+    const QString &path
+) const
+{
+    if (!hasSharedRoot())
+    {
+        return true;
+    }
+
+    const QFileInfo rootInfo(
+        sharedRootPath
+    );
+
+    const QFileInfo candidateInfo(
+        path
+    );
+
+    QString root =
+        rootInfo.canonicalFilePath();
+
+    if (root.isEmpty())
+    {
+        root =
+            rootInfo.absoluteFilePath();
+    }
+
+    QString candidate =
+        candidateInfo.canonicalFilePath();
+
+    if (candidate.isEmpty())
+    {
+        candidate =
+            candidateInfo.absoluteFilePath();
+    }
+
+    return isSameOrChildPath(
+        candidate,
+        root
+    );
+}
+
+
+bool MobileServer::isSharedRootPath(
+    const QString &path
+) const
+{
+    if (!hasSharedRoot())
+    {
+        return false;
+    }
+
+    const QFileInfo rootInfo(
+        sharedRootPath
+    );
+
+    const QFileInfo candidateInfo(
+        path
+    );
+
+    QString root =
+        rootInfo.canonicalFilePath();
+
+    if (root.isEmpty())
+    {
+        root =
+            rootInfo.absoluteFilePath();
+    }
+
+    QString candidate =
+        candidateInfo.canonicalFilePath();
+
+    if (candidate.isEmpty())
+    {
+        candidate =
+            candidateInfo.absoluteFilePath();
+    }
+
+    return normalizedPathForCompare(candidate)
+        == normalizedPathForCompare(root);
+}
+
+
 QString MobileServer::detectLocalIp() const
 {
+    struct Candidate
+    {
+        QString ip;
+        int score = -100000;
+    };
+
+    Candidate best;
+
     const QList<QNetworkInterface> interfaces =
         QNetworkInterface::allInterfaces();
 
     for (const QNetworkInterface &interface : interfaces)
     {
-        const auto flags =
-            interface.flags();
+        const auto flags = interface.flags();
 
         if (
-            !flags.testFlag(
-                QNetworkInterface::IsUp
-            )
-            || !flags.testFlag(
-                QNetworkInterface::IsRunning
-            )
-            || flags.testFlag(
-                QNetworkInterface::IsLoopBack
-            )
+            !flags.testFlag(QNetworkInterface::IsUp)
+            || !flags.testFlag(QNetworkInterface::IsRunning)
+            || flags.testFlag(QNetworkInterface::IsLoopBack)
         )
         {
             continue;
+        }
+
+        const QString interfaceText =
+            (
+                interface.name()
+                + QLatin1Char(' ')
+                + interface.humanReadableName()
+            ).toLower();
+
+        int interfaceScore = 0;
+
+        if (
+            interface.type() == QNetworkInterface::Wifi
+            || interface.type() == QNetworkInterface::Ethernet
+        )
+        {
+            interfaceScore += 100;
+        }
+
+        if (
+            interfaceText.contains(QStringLiteral("wi-fi"))
+            || interfaceText.contains(QStringLiteral("wifi"))
+            || interfaceText.contains(QStringLiteral("wireless"))
+            || interfaceText.contains(QStringLiteral("wlan"))
+            || interfaceText.contains(QStringLiteral("ethernet"))
+        )
+        {
+            interfaceScore += 50;
+        }
+
+        const bool looksVirtual =
+            interface.type() == QNetworkInterface::Virtual
+            || interfaceText.contains(QStringLiteral("vmware"))
+            || interfaceText.contains(QStringLiteral("virtualbox"))
+            || interfaceText.contains(QStringLiteral("host-only"))
+            || interfaceText.contains(QStringLiteral("hyper-v"))
+            || interfaceText.contains(QStringLiteral("vethernet"))
+            || interfaceText.contains(QStringLiteral("wsl"))
+            || interfaceText.contains(QStringLiteral("loopback"))
+            || interfaceText.contains(QStringLiteral("tap"))
+            || interfaceText.contains(QStringLiteral("tun"))
+            || interfaceText.contains(QStringLiteral("tailscale"))
+            || interfaceText.contains(QStringLiteral("zerotier"))
+            || interfaceText.contains(QStringLiteral("hamachi"));
+
+        if (looksVirtual)
+        {
+            interfaceScore -= 1000;
+        }
+
+        if (interfaceText.contains(QStringLiteral("bluetooth")))
+        {
+            interfaceScore -= 200;
         }
 
         const QList<QNetworkAddressEntry> entries =
@@ -1291,40 +1489,67 @@ QString MobileServer::detectLocalIp() const
 
         for (const QNetworkAddressEntry &entry : entries)
         {
-            const QHostAddress address =
-                entry.ip();
+            const QHostAddress address = entry.ip();
 
             if (
-                address.protocol()
-                    != QAbstractSocket::IPv4Protocol
+                address.protocol() != QAbstractSocket::IPv4Protocol
                 || address.isLoopback()
+                || address.isNull()
             )
             {
                 continue;
             }
 
-            const QString candidate =
-                address.toString();
+            const QString candidate = address.toString();
 
-            /*
-             * Skip APIPA addresses when a normal LAN address is available.
-             */
             if (
-                candidate.startsWith(
-                    QStringLiteral("169.254.")
-                )
+                candidate.startsWith(QStringLiteral("169.254."))
+                || candidate == QStringLiteral("0.0.0.0")
             )
             {
                 continue;
             }
 
-            return candidate;
+            int score = interfaceScore;
+
+            if (
+                candidate.startsWith(QStringLiteral("10."))
+                || candidate.startsWith(QStringLiteral("192.168."))
+            )
+            {
+                score += 20;
+            }
+            else if (candidate.startsWith(QStringLiteral("172.")))
+            {
+                const QStringList parts =
+                    candidate.split(QLatin1Char('.'));
+
+                if (parts.size() >= 2)
+                {
+                    bool ok = false;
+                    const int secondOctet = parts.at(1).toInt(&ok);
+
+                    if (ok && secondOctet >= 16 && secondOctet <= 31)
+                    {
+                        score += 20;
+                    }
+                }
+            }
+
+            if (score > best.score)
+            {
+                best.ip = candidate;
+                best.score = score;
+            }
         }
     }
 
-    return QStringLiteral(
-        "127.0.0.1"
-    );
+    if (!best.ip.isEmpty())
+    {
+        return best.ip;
+    }
+
+    return QStringLiteral("127.0.0.1");
 }
 
 
@@ -1454,6 +1679,41 @@ void MobileServer::setupRoutes()
             response["running"] =
                 isRunning();
 
+            response["share_enabled"] =
+                hasSharedRoot();
+
+            response["shared_root"] =
+                hasSharedRoot()
+                    ? QDir::toNativeSeparators(
+                        sharedRoot()
+                    )
+                    : QString();
+
+            response["shared_name"] =
+                hasSharedRoot()
+                    ? QFileInfo(
+                        sharedRoot()
+                    ).fileName()
+                    : QStringLiteral(
+                        "Full PC"
+                    );
+
+            response["read_only"] =
+                isReadOnly();
+
+            QJsonObject permissions;
+
+            permissions["browse"] = true;
+            permissions["download"] = true;
+            permissions["upload"] = !isReadOnly();
+            permissions["rename"] = !isReadOnly();
+            permissions["move"] = !isReadOnly();
+            permissions["delete"] = !isReadOnly();
+            permissions["sort"] = !isReadOnly();
+
+            response["permissions"] =
+                permissions;
+
             return jsonResponse(
                 response
             );
@@ -1469,6 +1729,16 @@ void MobileServer::setupRoutes()
         QHttpServerRequest::Method::Get,
         [this]()
         {
+            if (hasSharedRoot())
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Logs are unavailable while shared-folder mode is active."
+                    ),
+                    StatusCode::Forbidden
+                );
+            }
+
             if (
                 database
                 && !database->initialize()
@@ -1538,7 +1808,7 @@ void MobileServer::setupRoutes()
     httpServer->route(
         "/api/browse",
         QHttpServerRequest::Method::Post,
-        [](const QHttpServerRequest &request)
+        [this](const QHttpServerRequest &request)
         {
             const QJsonObject body =
                 parseJsonObject(
@@ -1553,7 +1823,19 @@ void MobileServer::setupRoutes()
             if (path.isEmpty())
             {
                 path =
-                    QDir::homePath();
+                    hasSharedRoot()
+                        ? sharedRoot()
+                        : QDir::homePath();
+            }
+
+            if (!isPathAllowed(path))
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Requested folder is outside the shared root."
+                    ),
+                    StatusCode::Forbidden
+                );
             }
 
             const QFileInfo directoryInfo(
@@ -1600,6 +1882,13 @@ void MobileServer::setupRoutes()
 
             for (const QFileInfo &entry : entries)
             {
+                if (!isPathAllowed(
+                        entry.absoluteFilePath()
+                    ))
+                {
+                    continue;
+                }
+
                 QJsonObject item;
 
                 item["name"] =
@@ -1635,6 +1924,27 @@ void MobileServer::setupRoutes()
                     directory.absolutePath()
                 );
 
+            QString parentPath =
+                QDir::toNativeSeparators(
+                    parent.absolutePath()
+                );
+
+            if (
+                hasSharedRoot()
+                && (
+                    isSharedRootPath(
+                        directory.absolutePath()
+                    )
+                    || !isPathAllowed(
+                        parent.absolutePath()
+                    )
+                )
+            )
+            {
+                parentPath =
+                    currentPath;
+            }
+
             QJsonObject response;
 
             response["status"] =
@@ -1644,9 +1954,13 @@ void MobileServer::setupRoutes()
                 currentPath;
 
             response["parent_path"] =
-                QDir::toNativeSeparators(
-                    parent.absolutePath()
-                );
+                parentPath;
+
+            response["share_enabled"] =
+                hasSharedRoot();
+
+            response["read_only"] =
+                isReadOnly();
 
             response["items"] =
                 items;
@@ -1680,7 +1994,7 @@ void MobileServer::setupRoutes()
     httpServer->route(
         "/api/download",
         QHttpServerRequest::Method::Post,
-        [](const QHttpServerRequest &request)
+        [this](const QHttpServerRequest &request)
         {
             const QJsonObject body =
                 parseJsonObject(
@@ -1699,6 +2013,16 @@ void MobileServer::setupRoutes()
                         "Path file tidak valid!"
                     ),
                     StatusCode::BadRequest
+                );
+            }
+
+            if (!isPathAllowed(path))
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Requested file is outside the shared root."
+                    ),
+                    StatusCode::Forbidden
                 );
             }
 
@@ -1826,7 +2150,7 @@ void MobileServer::setupRoutes()
     httpServer->route(
         "/api/rename",
         QHttpServerRequest::Method::Post,
-        [](const QHttpServerRequest &request)
+        [this](const QHttpServerRequest &request)
         {
             const QJsonObject body =
                 parseJsonObject(
@@ -1854,6 +2178,29 @@ void MobileServer::setupRoutes()
                         "Nama baru tidak valid."
                     ),
                     StatusCode::BadRequest
+                );
+            }
+
+            if (isReadOnly())
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Read-only share: rename is disabled."
+                    ),
+                    StatusCode::Forbidden
+                );
+            }
+
+            if (
+                !isPathAllowed(path)
+                || isSharedRootPath(path)
+            )
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Item cannot be renamed outside or at the shared root."
+                    ),
+                    StatusCode::Forbidden
                 );
             }
 
@@ -1978,7 +2325,7 @@ void MobileServer::setupRoutes()
     httpServer->route(
         "/api/move",
         QHttpServerRequest::Method::Post,
-        [](const QHttpServerRequest &request)
+        [this](const QHttpServerRequest &request)
         {
             const QJsonObject body =
                 parseJsonObject(
@@ -2006,6 +2353,30 @@ void MobileServer::setupRoutes()
                         "Source atau target folder tidak valid."
                     ),
                     StatusCode::BadRequest
+                );
+            }
+
+            if (isReadOnly())
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Read-only share: move is disabled."
+                    ),
+                    StatusCode::Forbidden
+                );
+            }
+
+            if (
+                !isPathAllowed(path)
+                || !isPathAllowed(targetDirectoryPath)
+                || isSharedRootPath(path)
+            )
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Move must stay inside the shared root."
+                    ),
+                    StatusCode::Forbidden
                 );
             }
 
@@ -2194,6 +2565,16 @@ void MobileServer::setupRoutes()
                     request
                 );
 
+            if (isReadOnly())
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Read-only share: sorting is disabled."
+                    ),
+                    StatusCode::Forbidden
+                );
+            }
+
             QString targetDirectory =
                 body.value(
                     QStringLiteral(
@@ -2211,6 +2592,16 @@ void MobileServer::setupRoutes()
                                 "Downloads"
                             )
                         );
+            }
+
+            if (!isPathAllowed(targetDirectory))
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Sort target is outside the shared root."
+                    ),
+                    StatusCode::Forbidden
+                );
             }
 
             const QFileInfo directoryInfo(
@@ -2279,7 +2670,7 @@ void MobileServer::setupRoutes()
     httpServer->route(
         "/api/delete",
         QHttpServerRequest::Method::Post,
-        [](const QHttpServerRequest &request)
+        [this](const QHttpServerRequest &request)
         {
             const QJsonObject body =
                 parseJsonObject(
@@ -2298,6 +2689,29 @@ void MobileServer::setupRoutes()
                         "Path file/folder tidak valid!"
                     ),
                     StatusCode::BadRequest
+                );
+            }
+
+            if (isReadOnly())
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Read-only share: delete is disabled."
+                    ),
+                    StatusCode::Forbidden
+                );
+            }
+
+            if (
+                !isPathAllowed(path)
+                || isSharedRootPath(path)
+            )
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Item cannot be deleted outside or at the shared root."
+                    ),
+                    StatusCode::Forbidden
                 );
             }
 
@@ -2373,8 +2787,18 @@ void MobileServer::setupRoutes()
     httpServer->route(
         "/api/upload",
         QHttpServerRequest::Method::Post,
-        [](const QHttpServerRequest &request)
+        [this](const QHttpServerRequest &request)
         {
+            if (isReadOnly())
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Read-only share: upload is disabled."
+                    ),
+                    StatusCode::Forbidden
+                );
+            }
+
             MultipartUpload upload;
             QByteArray body;
             QString errorMessage;
@@ -2406,6 +2830,16 @@ void MobileServer::setupRoutes()
             {
                 targetDirectory =
                     QDir::homePath();
+            }
+
+            if (!isPathAllowed(targetDirectory))
+            {
+                return apiError(
+                    QStringLiteral(
+                        "Upload target is outside the shared root."
+                    ),
+                    StatusCode::Forbidden
+                );
             }
 
             if (isProtectedPath(

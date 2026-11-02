@@ -30,21 +30,23 @@ private:
     QLabel *dropLabel;
 
     QPushButton *themeButton;
+    QPushButton *settingsButton;
     QPushButton *browseButton;
     QPushButton *scanButton;
     QPushButton *undoButton;
     QPushButton *mobileButton;
 
-    QCheckBox *dbCheckBox;
-    QCheckBox *aiCheckBox;
-    QCheckBox *othersCheckBox;
-    QCheckBox *deleteEmptyCheckBox;
-
-    QFrame *settingsFrame;
-
     bool darkMode = true;
 
+    bool dbEnabled = true;
+    bool aiEnabled = true;
+    bool othersEnabled = true;
+    bool deleteEmptyEnabled = true;
+    bool mobileShareEnabled = false;
+    bool mobileReadOnlyEnabled = true;
+
     void applyTheme();
+    void openSettingsDialog();
 
     void scanAndPreview();
     void showPreview(FileOrganizer *organizer);

@@ -6,6 +6,7 @@
 #include <QCheckBox>
 #include <QCoreApplication>
 #include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -151,8 +152,8 @@ MainWindow::MainWindow(
       mobileServer(mobileServer)
 {
     setWindowTitle("PyClean — Desktop Core");
-    resize(680, 650);
-    setMinimumSize(600, 580);
+    resize(760, 620);
+    setMinimumSize(600, 500);
 
     // ==================================================
     // CENTRAL WIDGET
@@ -197,6 +198,21 @@ MainWindow::MainWindow(
     );
 
 
+    settingsButton =
+        new QPushButton("⚙  Settings");
+
+    settingsButton->setObjectName(
+        "settingsButton"
+    );
+
+    settingsButton->setCursor(
+        Qt::PointingHandCursor
+    );
+
+    settingsButton->setMinimumHeight(36);
+    settingsButton->setMinimumWidth(104);
+
+
     themeButton =
         new QPushButton("☀  Light");
 
@@ -217,6 +233,10 @@ MainWindow::MainWindow(
     );
 
     headerLayout->addStretch();
+
+    headerLayout->addWidget(
+        settingsButton
+    );
 
     headerLayout->addWidget(
         themeButton
@@ -373,155 +393,9 @@ MainWindow::MainWindow(
     );
 
 
-    // ==================================================
-    // ENGINE SETTINGS
-    // ==================================================
-
-    settingsFrame =
-        new QFrame();
-
-    settingsFrame->setObjectName(
-        "settingsFrame"
-    );
-
-
-    auto *settingsLayout =
-        new QVBoxLayout(settingsFrame);
-
-    settingsLayout->setContentsMargins(
-        16, 12, 16, 14
-    );
-
-    settingsLayout->setSpacing(6);
-
-
-    auto *settingsHeader =
-        new QHBoxLayout();
-
-
-    auto *settingsTitle =
-        new QLabel(
-            "ENGINE CONFIGURATION"
-        );
-
-    settingsTitle->setObjectName(
-        "sectionLabel"
-    );
-
-
-    auto *settingsTag =
-        new QLabel(
-            "CORE"
-        );
-
-    settingsTag->setObjectName(
-        "sectionTag"
-    );
-
-    settingsTag->setAlignment(
-        Qt::AlignCenter
-    );
-
-
-    settingsHeader->addWidget(
-        settingsTitle
-    );
-
-    settingsHeader->addStretch();
-
-    settingsHeader->addWidget(
-        settingsTag
-    );
-
-
-    dbCheckBox =
-        new QCheckBox(
-            "SQLite Persistent Audit Trail"
-        );
-
-    aiCheckBox =
-        new QCheckBox(
-            "AI NLP Classification"
-        );
-
-    othersCheckBox =
-        new QCheckBox(
-            "Auto-group unknown files → Others"
-        );
-
-    deleteEmptyCheckBox =
-        new QCheckBox(
-            "Remove empty folders on rollback"
-        );
-
-
-    dbCheckBox->setObjectName(
-        "dbCheckBox"
-    );
-
-    aiCheckBox->setObjectName(
-        "aiCheckBox"
-    );
-
-    othersCheckBox->setObjectName(
-        "othersCheckBox"
-    );
-
-    deleteEmptyCheckBox->setObjectName(
-        "deleteEmptyCheckBox"
-    );
-
-
-    dbCheckBox->setChecked(true);
-    aiCheckBox->setChecked(true);
-    othersCheckBox->setChecked(true);
-    deleteEmptyCheckBox->setChecked(true);
-
-
-    dbCheckBox->setToolTip(
-        "Record successful file operations in SQLite."
-    );
-
-    aiCheckBox->setToolTip(
-        "Use filename keywords when an extension is unknown or missing."
-    );
-
-    othersCheckBox->setToolTip(
-        "Send files that remain unclassified to Others."
-    );
-
-    deleteEmptyCheckBox->setToolTip(
-        "Remove empty category folders after rollback."
-    );
-
-
-    settingsLayout->addLayout(
-        settingsHeader
-    );
-
-    settingsLayout->addSpacing(3);
-
-    settingsLayout->addWidget(
-        dbCheckBox
-    );
-
-    settingsLayout->addWidget(
-        aiCheckBox
-    );
-
-    settingsLayout->addWidget(
-        othersCheckBox
-    );
-
-    settingsLayout->addWidget(
-        deleteEmptyCheckBox
-    );
-
-
-    mainLayout->addWidget(
-        settingsFrame
-    );
-
+    // Engine/mobile configuration now lives in the Settings dialog.
+    // Keeping it off the main page prevents vertical layout compression
+    // at normal window sizes.
 
     // ==================================================
     // ACTION BUTTONS
@@ -857,7 +731,7 @@ MainWindow::MainWindow(
 
             if (
                 !organizer.undoLastAction(
-                    deleteEmptyCheckBox->isChecked()
+                    deleteEmptyEnabled
                 )
             ) {
 
@@ -944,6 +818,50 @@ MainWindow::MainWindow(
             true
         ).toBool();
 
+    dbEnabled =
+        settings.value(
+            "db_enabled",
+            true
+        ).toBool();
+
+    aiEnabled =
+        settings.value(
+            "ai_enabled",
+            true
+        ).toBool();
+
+    othersEnabled =
+        settings.value(
+            "others_enabled",
+            true
+        ).toBool();
+
+    deleteEmptyEnabled =
+        settings.value(
+            "delete_empty_on_rollback",
+            true
+        ).toBool();
+
+    mobileShareEnabled =
+        settings.value(
+            "mobile_limit_to_source",
+            false
+        ).toBool();
+
+    mobileReadOnlyEnabled =
+        settings.value(
+            "mobile_read_only",
+            true
+        ).toBool();
+
+
+    connect(
+        settingsButton,
+        &QPushButton::clicked,
+        this,
+        &MainWindow::openSettingsDialog
+    );
+
 
     // ==================================================
     // APPLY THEME
@@ -987,6 +905,11 @@ connect(
                 "●  Mobile agent stopped"
             );
 
+            settingsButton->setEnabled(true);
+            pathEdit->setReadOnly(false);
+            browseButton->setEnabled(true);
+            dropLabel->setEnabled(true);
+
             if (qrWindow)
             {
                 qrWindow->close();
@@ -1000,6 +923,48 @@ connect(
         statusLabel->setText(
             "●  Starting mobile agent..."
         );
+
+        this->mobileServer->setReadOnly(
+            mobileReadOnlyEnabled
+        );
+
+        if (mobileShareEnabled)
+        {
+            const QString selectedRoot =
+                pathEdit->text()
+                    .trimmed();
+
+            const QFileInfo rootInfo(
+                selectedRoot
+            );
+
+            if (
+                selectedRoot.isEmpty()
+                || !rootInfo.exists()
+                || !rootInfo.isDir()
+            )
+            {
+                QMessageBox::warning(
+                    this,
+                    "PyClean Shared Folder",
+                    "Select a valid source directory before launching the agent in shared-folder mode."
+                );
+
+                statusLabel->setText(
+                    "●  Shared folder is not configured"
+                );
+
+                return;
+            }
+
+            this->mobileServer->setSharedRoot(
+                rootInfo.absoluteFilePath()
+            );
+        }
+        else
+        {
+            this->mobileServer->clearSharedRoot();
+        }
 
 
         if (!this->mobileServer->start(5000))
@@ -1029,6 +994,20 @@ connect(
             "■  Stop Agent"
         );
 
+        /*
+         * Keep Settings available while the agent is running so Core
+         * preferences can still be reviewed/changed. Mobile Access controls
+         * inside the dialog are locked until the agent is stopped.
+         */
+        settingsButton->setEnabled(true);
+
+        if (this->mobileServer->hasSharedRoot())
+        {
+            pathEdit->setReadOnly(true);
+            browseButton->setEnabled(false);
+            dropLabel->setEnabled(false);
+        }
+
 
         const QString serverUrl =
             QString(
@@ -1042,15 +1021,47 @@ connect(
             );
 
 
+        QString accessMode;
+
+        if (this->mobileServer->hasSharedRoot())
+        {
+            accessMode =
+                QString(
+                    " • Shared: %1"
+                ).arg(
+                    QFileInfo(
+                        this->mobileServer->sharedRoot()
+                    ).fileName()
+                );
+        }
+        else
+        {
+            accessMode =
+                QStringLiteral(
+                    " • Full PC"
+                );
+        }
+
+        if (this->mobileServer->isReadOnly())
+        {
+            accessMode +=
+                QStringLiteral(
+                    " • Read only"
+                );
+        }
+
         statusLabel->setText(
             QString(
-                "●  Mobile agent online — %1:%2"
+                "●  Mobile agent online — %1:%2%3"
             )
             .arg(
                 this->mobileServer->localIp()
             )
             .arg(
                 this->mobileServer->port()
+            )
+            .arg(
+                accessMode
             )
         );
 
@@ -1084,6 +1095,653 @@ connect(
 // ==================================================
 
 applyTheme();
+}
+
+
+// ======================================================
+// SETTINGS DIALOG
+// ======================================================
+
+void MainWindow::openSettingsDialog()
+{
+    QDialog dialog(this);
+
+    dialog.setObjectName(
+        "settingsDialog"
+    );
+
+    dialog.setWindowTitle(
+        "PyClean — Settings"
+    );
+
+    dialog.resize(
+        560,
+        560
+    );
+
+    dialog.setMinimumSize(
+        480,
+        500
+    );
+
+    dialog.setModal(
+        true
+    );
+
+
+    const QString dialogStyle =
+        darkMode
+            ? QStringLiteral(R"(
+                QDialog#settingsDialog {
+                    background-color: #171722;
+                    color: #d9e0f2;
+                }
+
+                QLabel#settingsTitle {
+                    color: #f2f4ff;
+                    font-size: 22px;
+                    font-weight: 800;
+                }
+
+                QLabel#settingsSubtitle {
+                    color: #8f9bb5;
+                    font-size: 10px;
+                }
+
+                QLabel#settingsSectionTitle {
+                    color: #89b4fa;
+                    font-size: 9px;
+                    font-weight: 800;
+                    letter-spacing: 1px;
+                }
+
+                QLabel#settingsHint {
+                    color: #7d89a3;
+                    font-size: 9px;
+                }
+
+                QFrame#settingsCard {
+                    background-color: #20202d;
+                    border: 1px solid #303044;
+                    border-radius: 10px;
+                }
+
+                QCheckBox {
+                    color: #d5dced;
+                    spacing: 9px;
+                    padding: 7px 3px;
+                    font-size: 10px;
+                }
+
+                QCheckBox:disabled {
+                    color: #667088;
+                }
+
+                QCheckBox::indicator {
+                    width: 17px;
+                    height: 17px;
+                    border-radius: 5px;
+                    border: 1px solid #4a5068;
+                    background-color: #151520;
+                }
+
+                QCheckBox::indicator:hover {
+                    border-color: #89b4fa;
+                }
+
+                QCheckBox::indicator:checked {
+                    background-color: #89b4fa;
+                    border-color: #89b4fa;
+                }
+
+                QPushButton {
+                    border: none;
+                    border-radius: 8px;
+                    padding: 9px 18px;
+                    font-weight: 700;
+                    font-size: 10px;
+                }
+
+                QPushButton#settingsSave {
+                    background-color: #89b4fa;
+                    color: #11111b;
+                }
+
+                QPushButton#settingsSave:hover {
+                    background-color: #a5c6ff;
+                }
+
+                QPushButton#settingsCancel {
+                    background-color: #2b2d40;
+                    color: #d9e0f2;
+                    border: 1px solid #3a3e55;
+                }
+
+                QPushButton#settingsCancel:hover {
+                    background-color: #34384e;
+                }
+            )")
+            : QStringLiteral(R"(
+                QDialog#settingsDialog {
+                    background-color: #f4f6fa;
+                    color: #202735;
+                }
+
+                QLabel#settingsTitle {
+                    color: #172033;
+                    font-size: 22px;
+                    font-weight: 800;
+                }
+
+                QLabel#settingsSubtitle {
+                    color: #697386;
+                    font-size: 10px;
+                }
+
+                QLabel#settingsSectionTitle {
+                    color: #2367b1;
+                    font-size: 9px;
+                    font-weight: 800;
+                    letter-spacing: 1px;
+                }
+
+                QLabel#settingsHint {
+                    color: #7b8799;
+                    font-size: 9px;
+                }
+
+                QFrame#settingsCard {
+                    background-color: #ffffff;
+                    border: 1px solid #dce1ea;
+                    border-radius: 10px;
+                }
+
+                QCheckBox {
+                    color: #39465a;
+                    spacing: 9px;
+                    padding: 7px 3px;
+                    font-size: 10px;
+                }
+
+                QCheckBox:disabled {
+                    color: #9da6b5;
+                }
+
+                QCheckBox::indicator {
+                    width: 17px;
+                    height: 17px;
+                    border-radius: 5px;
+                    border: 1px solid #b8c1ce;
+                    background-color: #ffffff;
+                }
+
+                QCheckBox::indicator:hover {
+                    border-color: #2367b1;
+                }
+
+                QCheckBox::indicator:checked {
+                    background-color: #2367b1;
+                    border-color: #2367b1;
+                }
+
+                QPushButton {
+                    border: none;
+                    border-radius: 8px;
+                    padding: 9px 18px;
+                    font-weight: 700;
+                    font-size: 10px;
+                }
+
+                QPushButton#settingsSave {
+                    background-color: #2367b1;
+                    color: #ffffff;
+                }
+
+                QPushButton#settingsSave:hover {
+                    background-color: #2f78c8;
+                }
+
+                QPushButton#settingsCancel {
+                    background-color: #e9edf3;
+                    color: #303a4c;
+                    border: 1px solid #d2d9e3;
+                }
+
+                QPushButton#settingsCancel:hover {
+                    background-color: #dfe5ed;
+                }
+            )");
+
+    dialog.setStyleSheet(
+        dialogStyle
+    );
+
+
+    auto *mainLayout =
+        new QVBoxLayout(
+            &dialog
+        );
+
+    mainLayout->setContentsMargins(
+        22, 20, 22, 18
+    );
+
+    mainLayout->setSpacing(
+        12
+    );
+
+
+    auto *title =
+        new QLabel(
+            "Settings"
+        );
+
+    title->setObjectName(
+        "settingsTitle"
+    );
+
+
+    auto *subtitle =
+        new QLabel(
+            "Keep the main window focused. Configure engine and mobile access here."
+        );
+
+    subtitle->setObjectName(
+        "settingsSubtitle"
+    );
+
+    subtitle->setWordWrap(
+        true
+    );
+
+
+    mainLayout->addWidget(
+        title
+    );
+
+    mainLayout->addWidget(
+        subtitle
+    );
+
+
+    // --------------------------------------------------
+    // CORE ENGINE
+    // --------------------------------------------------
+
+    auto *coreCard =
+        new QFrame();
+
+    coreCard->setObjectName(
+        "settingsCard"
+    );
+
+    auto *coreLayout =
+        new QVBoxLayout(
+            coreCard
+        );
+
+    coreLayout->setContentsMargins(
+        14, 12, 14, 12
+    );
+
+    coreLayout->setSpacing(
+        3
+    );
+
+
+    auto *coreTitle =
+        new QLabel(
+            "CORE ENGINE"
+        );
+
+    coreTitle->setObjectName(
+        "settingsSectionTitle"
+    );
+
+
+    auto *coreHint =
+        new QLabel(
+            "Controls how PyClean classifies, logs and rolls back file operations."
+        );
+
+    coreHint->setObjectName(
+        "settingsHint"
+    );
+
+    coreHint->setWordWrap(
+        true
+    );
+
+
+    auto *dbBox =
+        new QCheckBox(
+            "SQLite Persistent Audit Trail"
+        );
+
+    auto *aiBox =
+        new QCheckBox(
+            "AI NLP Classification"
+        );
+
+    auto *othersBox =
+        new QCheckBox(
+            "Auto-group unknown files → Others"
+        );
+
+    auto *deleteEmptyBox =
+        new QCheckBox(
+            "Remove empty folders on rollback"
+        );
+
+
+    dbBox->setChecked(
+        dbEnabled
+    );
+
+    aiBox->setChecked(
+        aiEnabled
+    );
+
+    othersBox->setChecked(
+        othersEnabled
+    );
+
+    deleteEmptyBox->setChecked(
+        deleteEmptyEnabled
+    );
+
+
+    coreLayout->addWidget(
+        coreTitle
+    );
+
+    coreLayout->addWidget(
+        coreHint
+    );
+
+    coreLayout->addSpacing(
+        4
+    );
+
+    coreLayout->addWidget(
+        dbBox
+    );
+
+    coreLayout->addWidget(
+        aiBox
+    );
+
+    coreLayout->addWidget(
+        othersBox
+    );
+
+    coreLayout->addWidget(
+        deleteEmptyBox
+    );
+
+
+    mainLayout->addWidget(
+        coreCard
+    );
+
+
+    // --------------------------------------------------
+    // MOBILE ACCESS
+    // --------------------------------------------------
+
+    auto *mobileCard =
+        new QFrame();
+
+    mobileCard->setObjectName(
+        "settingsCard"
+    );
+
+    auto *mobileLayout =
+        new QVBoxLayout(
+            mobileCard
+        );
+
+    mobileLayout->setContentsMargins(
+        14, 12, 14, 12
+    );
+
+    mobileLayout->setSpacing(
+        3
+    );
+
+
+    auto *mobileTitle =
+        new QLabel(
+            "MOBILE ACCESS"
+        );
+
+    mobileTitle->setObjectName(
+        "settingsSectionTitle"
+    );
+
+
+    auto *mobileHint =
+        new QLabel(
+            "Controls what connected phones can browse and modify."
+        );
+
+    mobileHint->setObjectName(
+        "settingsHint"
+    );
+
+    mobileHint->setWordWrap(
+        true
+    );
+
+
+    auto *shareBox =
+        new QCheckBox(
+            "Limit mobile access → source directory"
+        );
+
+    auto *readOnlyBox =
+        new QCheckBox(
+            "Read-only mobile access (browse + download)"
+        );
+
+
+    shareBox->setChecked(
+        mobileShareEnabled
+    );
+
+    readOnlyBox->setChecked(
+        mobileReadOnlyEnabled
+    );
+
+
+    const bool agentRunning =
+        mobileServer
+        && mobileServer->isRunning();
+
+    if (agentRunning)
+    {
+        shareBox->setEnabled(
+            false
+        );
+
+        readOnlyBox->setEnabled(
+            false
+        );
+
+        mobileHint->setText(
+            "Stop the mobile agent before changing access boundaries."
+        );
+    }
+
+
+    mobileLayout->addWidget(
+        mobileTitle
+    );
+
+    mobileLayout->addWidget(
+        mobileHint
+    );
+
+    mobileLayout->addSpacing(
+        4
+    );
+
+    mobileLayout->addWidget(
+        shareBox
+    );
+
+    mobileLayout->addWidget(
+        readOnlyBox
+    );
+
+
+    mainLayout->addWidget(
+        mobileCard
+    );
+
+    mainLayout->addStretch();
+
+
+    // --------------------------------------------------
+    // ACTIONS
+    // --------------------------------------------------
+
+    auto *buttons =
+        new QDialogButtonBox(
+            QDialogButtonBox::Save
+            | QDialogButtonBox::Cancel
+        );
+
+    if (
+        auto *saveButton =
+            buttons->button(
+                QDialogButtonBox::Save
+            )
+    )
+    {
+        saveButton->setObjectName(
+            "settingsSave"
+        );
+    }
+
+    if (
+        auto *cancelButton =
+            buttons->button(
+                QDialogButtonBox::Cancel
+            )
+    )
+    {
+        cancelButton->setObjectName(
+            "settingsCancel"
+        );
+    }
+
+
+    connect(
+        buttons,
+        &QDialogButtonBox::rejected,
+        &dialog,
+        &QDialog::reject
+    );
+
+
+    connect(
+        buttons,
+        &QDialogButtonBox::accepted,
+        &dialog,
+        [this,
+         &dialog,
+         dbBox,
+         aiBox,
+         othersBox,
+         deleteEmptyBox,
+         shareBox,
+         readOnlyBox,
+         agentRunning]() {
+
+            dbEnabled =
+                dbBox->isChecked();
+
+            aiEnabled =
+                aiBox->isChecked();
+
+            othersEnabled =
+                othersBox->isChecked();
+
+            deleteEmptyEnabled =
+                deleteEmptyBox->isChecked();
+
+            if (!agentRunning)
+            {
+                mobileShareEnabled =
+                    shareBox->isChecked();
+
+                mobileReadOnlyEnabled =
+                    readOnlyBox->isChecked();
+            }
+
+
+            QSettings settings(
+                QCoreApplication::applicationDirPath()
+                + "/pyclean_config.ini",
+                QSettings::IniFormat
+            );
+
+            settings.setValue(
+                "db_enabled",
+                dbEnabled
+            );
+
+            settings.setValue(
+                "ai_enabled",
+                aiEnabled
+            );
+
+            settings.setValue(
+                "others_enabled",
+                othersEnabled
+            );
+
+            settings.setValue(
+                "delete_empty_on_rollback",
+                deleteEmptyEnabled
+            );
+
+            settings.setValue(
+                "mobile_limit_to_source",
+                mobileShareEnabled
+            );
+
+            settings.setValue(
+                "mobile_read_only",
+                mobileReadOnlyEnabled
+            );
+
+            settings.sync();
+
+            dialog.accept();
+
+            if (
+                statusLabel
+                && !(
+                    mobileServer
+                    && mobileServer->isRunning()
+                )
+            )
+            {
+                statusLabel->setText(
+                    "●  Settings saved"
+                );
+            }
+        }
+    );
+
+
+    mainLayout->addWidget(
+        buttons
+    );
+
+    dialog.exec();
 }
 
 
@@ -1146,8 +1804,7 @@ void MainWindow::applyTheme()
                 font-weight: bold;
             }
 
-            QFrame#directoryFrame,
-            QFrame#settingsFrame {
+            QFrame#directoryFrame {
                 background-color: #20202d;
                 border: 1px solid #303044;
                 border-radius: 10px;
@@ -1186,6 +1843,7 @@ void MainWindow::applyTheme()
             }
 
             QPushButton#themeButton,
+            QPushButton#settingsButton,
             QPushButton#browseButton {
                 background-color: #2b2d40;
                 color: #d9e0f2;
@@ -1193,12 +1851,14 @@ void MainWindow::applyTheme()
             }
 
             QPushButton#themeButton:hover,
+            QPushButton#settingsButton:hover,
             QPushButton#browseButton:hover {
                 background-color: #34384e;
                 border: 1px solid #505873;
             }
 
             QPushButton#themeButton:pressed,
+            QPushButton#settingsButton:pressed,
             QPushButton#browseButton:pressed {
                 background-color: #242638;
             }
@@ -1420,8 +2080,7 @@ void MainWindow::applyTheme()
                 font-weight: bold;
             }
 
-            QFrame#directoryFrame,
-            QFrame#settingsFrame {
+            QFrame#directoryFrame {
                 background-color: #ffffff;
                 border: 1px solid #dce1ea;
                 border-radius: 10px;
@@ -1460,6 +2119,7 @@ void MainWindow::applyTheme()
             }
 
             QPushButton#themeButton,
+            QPushButton#settingsButton,
             QPushButton#browseButton {
                 background-color: #e9edf3;
                 color: #303a4c;
@@ -1467,12 +2127,14 @@ void MainWindow::applyTheme()
             }
 
             QPushButton#themeButton:hover,
+            QPushButton#settingsButton:hover,
             QPushButton#browseButton:hover {
                 background-color: #dfe5ed;
                 border: 1px solid #bdc7d5;
             }
 
             QPushButton#themeButton:pressed,
+            QPushButton#settingsButton:pressed,
             QPushButton#browseButton:pressed {
                 background-color: #d5dce6;
             }
@@ -1705,7 +2367,7 @@ void MainWindow::scanAndPreview()
         nullptr;
 
 
-    if (dbCheckBox->isChecked()) {
+    if (dbEnabled) {
 
         if (!database.initialize()) {
 
@@ -1736,8 +2398,8 @@ void MainWindow::scanAndPreview()
 
     if (
         !organizer.scan(
-            aiCheckBox->isChecked(),
-            othersCheckBox->isChecked()
+            aiEnabled,
+            othersEnabled
         )
     ) {
 

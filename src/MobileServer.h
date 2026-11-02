@@ -32,6 +32,20 @@ public:
     [[nodiscard]]
     QString errorMessage() const;
 
+    void setSharedRoot(const QString &path);
+    void clearSharedRoot();
+
+    [[nodiscard]]
+    QString sharedRoot() const;
+
+    [[nodiscard]]
+    bool hasSharedRoot() const;
+
+    void setReadOnly(bool enabled);
+
+    [[nodiscard]]
+    bool isReadOnly() const;
+
 private:
     QHttpServer *httpServer = nullptr;
     QTcpServer *tcpServer = nullptr;
@@ -42,6 +56,15 @@ private:
     QString serverIp;
     QString lastError;
 
+    QString sharedRootPath;
+    bool readOnlyMode = false;
+
     void setupRoutes();
     QString detectLocalIp() const;
+
+    [[nodiscard]]
+    bool isPathAllowed(const QString &path) const;
+
+    [[nodiscard]]
+    bool isSharedRootPath(const QString &path) const;
 };
